@@ -1,0 +1,192 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: industrial-visual-inspection-
+spec:
+  entrypoint: inspection-dag
+  arguments:
+    parameters:
+      - name: image-id
+        value: line-17-frame-000184
+      - name: part-type
+        value: pump-housing
+
+  templates:
+    - name: inspection-dag
+      dag:
+        tasks:
+          - name: camera-event
+            template: camera-event
+
+          - name: quality-check
+            dependencies: [camera-event]
+            template: quality-check
+            arguments:
+              parameters:
+                - name: event
+                  value: "{{tasks.camera-event.outputs.parameters.result}}"
+
+          - name: visual-inspection
+            dependencies: [quality-check]
+            template: visual-inspection
+            arguments:
+              parameters:
+                - name: event
+                  value: "{{tasks.camera-event.outputs.parameters.result}}"
+
+          - name: decision
+            dependencies: [visual-inspection]
+            template: decision
+            arguments:
+              parameters:
+                - name: event
+                  value: "{{tasks.camera-event.outputs.parameters.result}}"
+                - name: quality
+                  value: "{{tasks.quality-check.outputs.parameters.result}}"
+                - name: inspection
+                  value: "{{tasks.visual-inspection.outputs.parameters.result}}"
+
+          - name: report
+            dependencies: [decision]
+            template: report
+            arguments:
+              parameters:
+                - name: final-report
+                  value: "{{tasks.decision.outputs.parameters.result}}"
+
+    - name: camera-event
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import json
+          from pathlib import Path
+
+          event = {
+              "image_id": "{{workflow.parameters.image-id}}",
+              "part_type": "{{workflow.parameters.part-type}}",
+              "image_uri": "s3://factory-inspection/raw/{{workflow.parameters.image-id}}.jpg",
+          }
+
+          print(json.dumps(event, indent=2))
+          Path("/tmp/result.json").write_text(json.dumps(event))
+      outputs:
+        parameters:
+          - name: result
+            valueFrom:
+              path: /tmp/result.json
+
+    - name: quality-check
+      inputs:
+        parameters:
+          - name: event
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import hashlib
+          import json
+          from pathlib import Path
+
+          event = json.loads("""{{inputs.parameters.event}}""")
+          image_id = event["image_id"]
+          raw = int(hashlib.sha256(f"{image_id}:quality".encode()).hexdigest()[:8], 16)
+          blur_score = round(raw / 0xFFFFFFFF, 3)
+
+          result = {
+              "quality": "good" if blur_score < 0.70 else "poor",
+              "blur_score": blur_score,
+          }
+
+          print(json.dumps(result, indent=2))
+          Path("/tmp/result.json").write_text(json.dumps(result))
+      outputs:
+        parameters:
+          - name: result
+            valueFrom:
+              path: /tmp/result.json
+
+    - name: visual-inspection
+      inputs:
+        parameters:
+          - name: event
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import hashlib
+          import json
+          from pathlib import Path
+
+          event = json.loads("""{{inputs.parameters.event}}""")
+          image_id = event["image_id"]
+          raw = int(hashlib.sha256(f"{image_id}:defect".encode()).hexdigest()[:8], 16)
+          defect_score = round(raw / 0xFFFFFFFF, 3)
+
+          result = {
+              "part_match": True,
+              "defect": "scratch" if defect_score > 0.60 else "none",
+              "defect_score": defect_score,
+          }
+
+          print(json.dumps(result, indent=2))
+          Path("/tmp/result.json").write_text(json.dumps(result))
+      outputs:
+        parameters:
+          - name: result
+            valueFrom:
+              path: /tmp/result.json
+
+    - name: decision
+      inputs:
+        parameters:
+          - name: event
+          - name: quality
+          - name: inspection
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import json
+          from pathlib import Path
+
+          event = json.loads("""{{inputs.parameters.event}}""")
+          quality = json.loads("""{{inputs.parameters.quality}}""")
+          inspection = json.loads("""{{inputs.parameters.inspection}}""")
+
+          if quality["quality"] == "poor":
+              decision = "manual-review"
+          elif inspection["defect"] != "none":
+              decision = "rework"
+          else:
+              decision = "pass"
+
+          result = {
+              "image_id": event["image_id"],
+              "part_type": event["part_type"],
+              "quality": quality["quality"],
+              "defect": inspection["defect"],
+              "decision": decision,
+          }
+
+          print(json.dumps(result, indent=2))
+          Path("/tmp/result.json").write_text(json.dumps(result))
+      outputs:
+        parameters:
+          - name: result
+            valueFrom:
+              path: /tmp/result.json
+
+    - name: report
+      inputs:
+        parameters:
+          - name: final-report
+      container:
+        image: python:3.11-slim
+        command: [python, -c]
+        args:
+          - |
+            import json
+            report = json.loads("""{{inputs.parameters.final-report}}""")
+            print("FINAL INSPECTION REPORT")
+            print(json.dumps(report, indent=2))

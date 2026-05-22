@@ -1,0 +1,19 @@
+However, we are looking for some more well-defined Micro-Services/FaaS/CaaS workflows.
+Please work with Tapajit to understand how such M-S workflows are constructed and operate (using containers and web-services/HTTP). We should be able to find some ready-made workflows. I am sure there are many. You can look at how workflows are formed by AWS Step Function and Azure function workflows etc.
+
+Other than that if we want to improvise workflows, there are some good sources; e.g. ECO paper in CCGrid 2021 and even some of our previous works. Once called VLCC for live streaming (in our publication page and many others). Tapajit can elaborate...
+Your suggestions, however, are very small and AI-specific; we search for similar but bigger workflows composed of several/many nodes in the DAG.
+
+I have uploaded our tentative project plan and some relevant work or (that contains some example workflows) inside /resources folder.
+
+- We want to find some readymade/exiting DAG ML workflows (preferable industrial) with multiple nodes/task. By ML workflow we mean, it is not training pipeline.
+More like a prediction or something similar.
+
+- Each task should be container based task.
+
+- The workflow can be run using argo workflows, but if it is not a good option. We are open to other option too.
+
+Please look for such workflows, give me resources or suggest me. Generate a markdown document with your suggestions.
+For now, ignore the serverless functions.
+
+ Can you find one such workflow for now? If you have several option pick the best suited one, also make sure it is runnable.

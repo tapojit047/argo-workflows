@@ -1,0 +1,111 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: ml-pipeline-volume-
+spec:
+  entrypoint: ml-pipeline
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+  templates:
+    - name: ml-pipeline
+      steps:
+        - - name: prepare-data
+            template: prepare-data
+        - - name: train-model
+            template: train-model
+        - - name: evaluate-model
+            template: evaluate-model
+
+    - name: prepare-data
+      container:
+        image: python:3.11-slim
+        command: [bash, -c]
+        args:
+          - |
+            set -e
+            pip install --no-cache-dir scikit-learn pandas
+            python - <<'PYCODE'
+            import pandas as pd
+            from sklearn.datasets import load_iris
+            from sklearn.model_selection import train_test_split
+
+            iris = load_iris(as_frame=True)
+            df = iris.frame
+            train_df, test_df = train_test_split(
+                df,
+                test_size=0.25,
+                random_state=42,
+                stratify=df["target"],
+            )
+
+            train_df.to_csv("/mnt/work/train.csv", index=False)
+            test_df.to_csv("/mnt/work/test.csv", index=False)
+
+            print(f"Wrote /mnt/work/train.csv with {len(train_df)} rows")
+            print(f"Wrote /mnt/work/test.csv with {len(test_df)} rows")
+            PYCODE
+        volumeMounts:
+          - name: workdir
+            mountPath: /mnt/work
+
+    - name: train-model
+      container:
+        image: python:3.11-slim
+        command: [bash, -c]
+        args:
+          - |
+            set -e
+            pip install --no-cache-dir scikit-learn pandas joblib
+            python - <<'PYCODE'
+            import joblib
+            import pandas as pd
+            from sklearn.ensemble import RandomForestClassifier
+
+            train_df = pd.read_csv("/mnt/work/train.csv")
+            X_train = train_df.drop(columns=["target"])
+            y_train = train_df["target"]
+
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model.fit(X_train, y_train)
+
+            joblib.dump(model, "/mnt/work/model.joblib")
+            print("Saved trained model to /mnt/work/model.joblib")
+            PYCODE
+        volumeMounts:
+          - name: workdir
+            mountPath: /mnt/work
+
+    - name: evaluate-model
+      container:
+        image: python:3.11-slim
+        command: [bash, -c]
+        args:
+          - |
+            set -e
+            pip install --no-cache-dir scikit-learn pandas joblib
+            python - <<'PYCODE'
+            import joblib
+            import pandas as pd
+            from sklearn.metrics import accuracy_score, classification_report
+
+            test_df = pd.read_csv("/mnt/work/test.csv")
+            X_test = test_df.drop(columns=["target"])
+            y_test = test_df["target"]
+
+            model = joblib.load("/mnt/work/model.joblib")
+            predictions = model.predict(X_test)
+            accuracy = accuracy_score(y_test, predictions)
+
+            print("Model evaluation complete")
+            print(f"Accuracy: {accuracy:.3f}")
+            print(classification_report(y_test, predictions))
+            PYCODE
+        volumeMounts:
+          - name: workdir
+            mountPath: /mnt/work

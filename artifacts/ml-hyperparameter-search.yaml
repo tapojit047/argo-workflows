@@ -1,0 +1,118 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: ml-hyperparameter-search-
+spec:
+  entrypoint: search
+  templates:
+    - name: search
+      steps:
+        - - name: train-c-001
+            template: train-with-c
+            arguments:
+              parameters:
+                - name: c-value
+                  value: "0.01"
+          - name: train-c-01
+            template: train-with-c
+            arguments:
+              parameters:
+                - name: c-value
+                  value: "0.1"
+          - name: train-c-1
+            template: train-with-c
+            arguments:
+              parameters:
+                - name: c-value
+                  value: "1.0"
+          - name: train-c-10
+            template: train-with-c
+            arguments:
+              parameters:
+                - name: c-value
+                  value: "10.0"
+        - - name: compare-results
+            template: compare-results
+            arguments:
+              parameters:
+                - name: result-c-001
+                  value: "{{steps.train-c-001.outputs.parameters.result}}"
+                - name: result-c-01
+                  value: "{{steps.train-c-01.outputs.parameters.result}}"
+                - name: result-c-1
+                  value: "{{steps.train-c-1.outputs.parameters.result}}"
+                - name: result-c-10
+                  value: "{{steps.train-c-10.outputs.parameters.result}}"
+
+    - name: train-with-c
+      inputs:
+        parameters:
+          - name: c-value
+      script:
+        image: python:3.11-slim
+        command: [bash]
+        source: |
+          set -e
+          pip install --no-cache-dir scikit-learn
+          python - <<'PYCODE'
+          from pathlib import Path
+          from sklearn.datasets import load_breast_cancer
+          from sklearn.linear_model import LogisticRegression
+          from sklearn.metrics import accuracy_score
+          from sklearn.model_selection import train_test_split
+          from sklearn.preprocessing import StandardScaler
+          from sklearn.pipeline import make_pipeline
+
+          c_value = float("{{inputs.parameters.c-value}}")
+
+          data = load_breast_cancer()
+          X_train, X_test, y_train, y_test = train_test_split(
+              data.data,
+              data.target,
+              test_size=0.25,
+              random_state=42,
+              stratify=data.target,
+          )
+
+          model = make_pipeline(
+              StandardScaler(),
+              LogisticRegression(C=c_value, max_iter=500),
+          )
+          model.fit(X_train, y_train)
+          predictions = model.predict(X_test)
+          accuracy = accuracy_score(y_test, predictions)
+
+          result = f"C={c_value}, accuracy={accuracy:.4f}"
+          print(result)
+          Path("/tmp/result.txt").write_text(result)
+          PYCODE
+      outputs:
+        parameters:
+          - name: result
+            valueFrom:
+              path: /tmp/result.txt
+
+    - name: compare-results
+      inputs:
+        parameters:
+          - name: result-c-001
+          - name: result-c-01
+          - name: result-c-1
+          - name: result-c-10
+      container:
+        image: python:3.11-slim
+        command: [python, -c]
+        args:
+          - |
+            results = [
+                "{{inputs.parameters.result-c-001}}",
+                "{{inputs.parameters.result-c-01}}",
+                "{{inputs.parameters.result-c-1}}",
+                "{{inputs.parameters.result-c-10}}",
+            ]
+            print("Hyperparameter search results:")
+            for result in results:
+                print(result)
+
+            best = max(results, key=lambda item: float(item.split("accuracy=")[1]))
+            print(f"Best result: {best}")
